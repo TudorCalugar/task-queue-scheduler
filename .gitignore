@@ -31,3 +31,6 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Baza de date H2 locala
+/data/

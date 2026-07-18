@@ -4,6 +4,9 @@ import com.taskqueue.taskqueue.model.Task;
 import com.taskqueue.taskqueue.service.TaskService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.List;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 
 @RestController
 @RequestMapping("/tasks")
@@ -15,10 +18,13 @@ public class TaskController {
         this.taskService = taskService;
     }
 
-    public record SubmitTaskRequest(String type, String payload) {}
+    public record SubmitTaskRequest(
+            @NotBlank(message = "type este obligatoriu") String type,
+            String payload
+    ) {}
 
     @PostMapping
-    public ResponseEntity<Task> submitTask(@RequestBody SubmitTaskRequest request) {
+    public ResponseEntity<Task> submitTask(@Valid @RequestBody SubmitTaskRequest request) {
         Task task = taskService.submit(request.type(), request.payload());
         return ResponseEntity.ok(task);
     }
@@ -28,5 +34,10 @@ public class TaskController {
         return taskService.getById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @GetMapping
+    public List<Task> getAllTasks() {
+        return taskService.getAll();
     }
 }

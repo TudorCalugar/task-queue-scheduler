@@ -9,6 +9,8 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -36,17 +38,35 @@ public class TaskWorker implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        recoverUnfinishedTasks();
+
         for (int i = 1; i <= WORKER_COUNT; i++) {
             pool.submit(this::workLoop);
         }
         log.info("{} workeri porniti, asteapta task-uri...", WORKER_COUNT);
     }
 
+    // la pornire: repunem in coada task-urile ramase neterminate dupa un restart
+    private void recoverUnfinishedTasks() {
+        List<Task> unfinished = taskService.findUnfinished();
+        if (unfinished.isEmpty()) {
+            return;
+        }
+        for (Task task : unfinished) {
+            if (task.getStatus() == Task.Status.RUNNING) {
+                task.setStatus(Task.Status.PENDING);   // era in lucru cand a picat serverul
+                taskService.save(task);
+            }
+            taskService.requeueAfter(task.getId(), 0);
+        }
+        log.info("Recuperate {} task-uri neterminate dupa restart", unfinished.size());
+    }
+
     private void workLoop() {
         while (true) {
             try {
-                Task task = taskService.takeNext();
-                process(task);
+                String taskId = taskService.takeNextId();
+                process(taskId);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.info("Worker oprit.");
@@ -55,24 +75,32 @@ public class TaskWorker implements ApplicationRunner {
         }
     }
 
-    private void process(Task task) throws InterruptedException {
+    private void process(String taskId) throws InterruptedException {
+        Optional<Task> maybeTask = taskService.getById(taskId);
+        if (maybeTask.isEmpty()) {
+            log.warn("Task {} nu a fost gasit in DB, il ignor", taskId);
+            return;
+        }
+        Task task = maybeTask.get();
+
         log.info("Procesez task {} (tip: {}) - incercarea {}",
                 task.getId(), task.getType(), task.getRetryCount() + 1);
 
         task.setStatus(Task.Status.RUNNING);
+        taskService.save(task);
 
         try {
             doWork(task);
             task.setStatus(Task.Status.DONE);
+            taskService.save(task);
             log.info("Task {} finalizat -> DONE", task.getId());
         } catch (InterruptedException e) {
-            throw e;                        // oprirea aplicatiei nu e "esec de task"
+            throw e;
         } catch (Exception e) {
             handleFailure(task, e);
         }
     }
 
-    // "munca" simulata
     private void doWork(Task task) throws InterruptedException {
         Thread.sleep(2000);
         if ("fail".equalsIgnoreCase(task.getType())) {
@@ -85,18 +113,20 @@ public class TaskWorker implements ApplicationRunner {
 
         if (task.getRetryCount() > MAX_RETRIES) {
             task.setStatus(Task.Status.FAILED);
+            taskService.save(task);
             log.error("Task {} a esuat definitiv dupa {} reincercari: {}",
                     task.getId(), MAX_RETRIES, e.getMessage());
             return;
         }
 
-        long delay = BASE_BACKOFF_MS * (1L << (task.getRetryCount() - 1));  // 1s, 2s, 4s
+        long delay = BASE_BACKOFF_MS * (1L << (task.getRetryCount() - 1));
         task.setStatus(Task.Status.PENDING);
+        taskService.save(task);
 
         log.warn("Task {} a esuat ({}). Retry {}/{} peste {} ms",
                 task.getId(), e.getMessage(), task.getRetryCount(), MAX_RETRIES, delay);
 
-        taskService.requeueAfter(task, delay);
+        taskService.requeueAfter(task.getId(), delay);
     }
 
     @PreDestroy

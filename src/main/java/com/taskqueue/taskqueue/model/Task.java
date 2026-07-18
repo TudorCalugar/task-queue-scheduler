@@ -1,21 +1,42 @@
 package com.taskqueue.taskqueue.model;
 
+import jakarta.persistence.*;
 import java.time.Instant;
 import java.util.UUID;
 
+@Entity
+@Table(name = "tasks")
 public class Task {
 
     public enum Status {
         PENDING, RUNNING, DONE, FAILED
     }
 
-    private final String id;
-    private final String type;
-    private final String payload;
+    @Id
+    private String id;
+
+    @Column(nullable = false)
+    private String type;
+
+    @Column(columnDefinition = "TEXT")
+    private String payload;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
     private Status status;
-    private final Instant createdAt;
+
+    @Column(nullable = false, updatable = false)
+    private Instant createdAt;
+
+    @Column(nullable = false)
     private Instant updatedAt;
+
+    @Column(nullable = false)
     private int retryCount;
+
+    // JPA are nevoie de un constructor gol (fara argumente)
+    protected Task() {
+    }
 
     public Task(String type, String payload) {
         this.id = UUID.randomUUID().toString();

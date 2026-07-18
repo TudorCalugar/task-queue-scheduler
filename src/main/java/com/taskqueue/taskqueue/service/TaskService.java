@@ -1,44 +1,25 @@
 package com.taskqueue.taskqueue.service;
 
 import com.taskqueue.taskqueue.model.Task;
+import com.taskqueue.taskqueue.repository.TaskRepository;
 import org.springframework.stereotype.Service;
 
-import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
-
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Service
 public class TaskService {
 
-    // coada propriu-zisă: task-urile de procesat, în ordine FIFO
-    private final BlockingQueue<Task> queue = new LinkedBlockingQueue<>();
+    private final TaskRepository taskRepository;
 
-    // evidența tuturor task-urilor, acces rapid după id (pentru GET /tasks/{id})
-    private final Map<String, Task> tasksById = new ConcurrentHashMap<>();
+    // coada de lucru: doar id-uri, nu obiecte (obiectele traiesc in DB acum)
+    private final BlockingQueue<String> queue = new LinkedBlockingQueue<>();
 
-    public Task submit(String type, String payload) {
-        Task task = new Task(type, payload);
-        tasksById.put(task.getId(), task);
-        queue.add(task);
-        return task;
-    }
-
-    public Optional<Task> getById(String id) {
-        return Optional.ofNullable(tasksById.get(id));
-    }
-
-    // scoate următorul task din coadă; dacă nu e niciunul, ASTEAPTĂ până apare
-    public Task takeNext() throws InterruptedException {
-        return queue.take();
-    }
-
-    // ceas separat care repune task-urile esuate in coada dupa un delay
     private final ScheduledExecutorService retryScheduler =
             Executors.newSingleThreadScheduledExecutor(runnable -> {
                 Thread t = new Thread(runnable, "retry-scheduler");
@@ -46,8 +27,40 @@ public class TaskService {
                 return t;
             });
 
-    public void requeueAfter(Task task, long delayMillis) {
-        retryScheduler.schedule(() -> queue.add(task), delayMillis, TimeUnit.MILLISECONDS);
+    public TaskService(TaskRepository taskRepository) {
+        this.taskRepository = taskRepository;
     }
 
+    public Task submit(String type, String payload) {
+        Task task = new Task(type, payload);
+        taskRepository.save(task);       // salveaza in DB
+        queue.add(task.getId());         // pune doar id-ul in coada
+        return task;
+    }
+
+    public Optional<Task> getById(String id) {
+        return taskRepository.findById(id);
+    }
+
+    public String takeNextId() throws InterruptedException {
+        return queue.take();
+    }
+
+    public void save(Task task) {
+        taskRepository.save(task);
+    }
+
+    public void requeueAfter(String taskId, long delayMillis) {
+        retryScheduler.schedule(() -> queue.add(taskId), delayMillis, TimeUnit.MILLISECONDS);
+    }
+
+    public List<Task> getAll() {
+        return taskRepository.findAll();
+    }
+
+    // pentru recuperare la restart: task-uri ramase in lucru
+    public List<Task> findUnfinished() {
+        return taskRepository.findByStatusIn(
+                List.of(Task.Status.PENDING, Task.Status.RUNNING));
+    }
 }
