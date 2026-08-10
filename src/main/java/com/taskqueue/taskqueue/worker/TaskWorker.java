@@ -21,8 +21,7 @@ public class TaskWorker implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(TaskWorker.class);
 
     private static final int WORKER_COUNT = 3;
-    private static final int MAX_RETRIES = 3;
-    private static final long BASE_BACKOFF_MS = 1000;
+    private final RetryPolicy retryPolicy = new RetryPolicy(3, 1000);
 
     private final TaskService taskService;
     private final ExecutorService pool;
@@ -111,20 +110,21 @@ public class TaskWorker implements ApplicationRunner {
     private void handleFailure(Task task, Exception e) {
         task.incrementRetryCount();
 
-        if (task.getRetryCount() > MAX_RETRIES) {
+        if (!retryPolicy.shouldRetry(task.getRetryCount())) {
             task.setStatus(Task.Status.FAILED);
             taskService.save(task);
             log.error("Task {} a esuat definitiv dupa {} reincercari: {}",
-                    task.getId(), MAX_RETRIES, e.getMessage());
+                    task.getId(), retryPolicy.getMaxRetries(), e.getMessage());
             return;
         }
 
-        long delay = BASE_BACKOFF_MS * (1L << (task.getRetryCount() - 1));
+        long delay = retryPolicy.backoffMillis(task.getRetryCount());
         task.setStatus(Task.Status.PENDING);
         taskService.save(task);
 
         log.warn("Task {} a esuat ({}). Retry {}/{} peste {} ms",
-                task.getId(), e.getMessage(), task.getRetryCount(), MAX_RETRIES, delay);
+                task.getId(), e.getMessage(), task.getRetryCount(),
+                retryPolicy.getMaxRetries(), delay);
 
         taskService.requeueAfter(task.getId(), delay);
     }
