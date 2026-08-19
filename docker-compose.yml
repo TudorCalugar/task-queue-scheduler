@@ -1,0 +1,12 @@
+services:
+  backend:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:h2:file:/data/taskqueue;AUTO_SERVER=TRUE
+    volumes:
+      - taskqueue-data:/data
+
+volumes:
+  taskqueue-data:
